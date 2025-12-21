@@ -1,0 +1,19 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.10
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/prettier/pre-commit
+    rev: 57f39166b5a5a504d6808b87ab98d41ebf095b46
+    hooks:
+      - id: prettier
+        types_or: [markdown, yaml]
+  - repo: https://github.com/sqlfluff/sqlfluff
+    rev: 4.0.0a2
+    hooks:
+      - id: sqlfluff-lint
+        args: [--dialect, sqlite]
+      - id: sqlfluff-fix
+        args: [--dialect, sqlite]
