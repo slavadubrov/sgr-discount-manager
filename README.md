@@ -29,7 +29,7 @@ An AI-powered pricing negotiation agent using **Structured Generation & Reasonin
 Initialize the SQLite and DuckDB databases with dummy user data:
 
 ```bash
-uv run scripts/setup_data.py
+uv run python -m scripts.setup_data
 ```
 
 ### 2. Start vLLM Server
@@ -140,10 +140,26 @@ uv run python -m sgr.agent
 
 ## Project Structure
 
-- `sgr/agent.py`: Main agent logic and execution flow.
-- `sgr/models/schemas.py`: Pydantic models enforcing the SGR (Structured Generation & Reasoning) logic.
+```text
+sgr/
+├── __init__.py              # Public API exports
+├── agent.py                 # Main agent orchestration
+├── config/
+│   └── constants.py         # Centralized configuration
+├── models/
+│   └── schemas.py           # Pydantic SGR schemas
+├── prompts/
+│   ├── routing.py           # Routing phase prompts
+│   └── pricing.py           # Pricing phase prompts
+├── store/
+│   ├── hybrid_store.py      # Hot/Cold data retrieval
+│   └── sql/                 # SQL query files
+└── utils/
+    ├── json_utils.py        # JSON parsing utilities
+    └── llm_client.py        # LLM client wrapper
+```
+
 - `scripts/setup_data.py`: Script to generate synthetic data for testing.
-- `sgr/store/hybrid_store.py`: `HybridFeatureStore` class handling data retrieval from Hot and Cold stores.
 
 ## Maintenance
 

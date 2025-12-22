@@ -1,84 +1,53 @@
-import json
-from openai import OpenAI
-from .models.schemas import RouterSchema, PricingLogic
+"""Pricing negotiation agent using Schema-Guided Responses.
+
+This module implements the main pricing agent that orchestrates:
+1. Intent routing (pricing vs general queries)
+2. User context retrieval from hybrid feature store
+3. LLM-powered pricing decisions with schema enforcement
+
+The agent follows Single Responsibility Principle - it only handles
+the workflow orchestration, delegating specific tasks to specialized modules.
+"""
+
+from .config.constants import (
+    DEFAULT_CART_VALUE,
+    DEFAULT_CHURN_PROBABILITY,
+    DEFAULT_PROFIT_MARGIN,
+)
+from .models.schemas import PricingLogic, RouterSchema
+from .prompts.pricing import ASSISTANT_FETCH_MESSAGE, build_pricing_context_prompt
+from .prompts.routing import build_routing_prompt
 from .store.hybrid_store import HybridFeatureStore
-
-# 1. Setup Client (vLLM must be running with --guided-decoding-backend xgrammar)
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="EMPTY")
-feature_store = HybridFeatureStore()
+from .utils.llm_client import LLMClient
 
 
-def get_available_model() -> str:
-    """Auto-detect the model running on vLLM server."""
-    try:
-        models = client.models.list()
-        if models.data:
-            return models.data[0].id
-    except Exception:
-        pass
-    # Fallback to default
-    return "Qwen/Qwen2.5-1.5B-Instruct"
+def pricing_agent(user_query: str, user_id: str) -> str:
+    """Process a user pricing query and return an appropriate response.
 
+    This is the main entry point for the pricing negotiation system.
+    It routes queries, fetches user context, and generates personalized
+    discount offers based on business rules.
 
-MODEL = get_available_model()
+    Args:
+        user_query: The user's message/request.
+        user_id: Unique identifier for the user.
 
+    Returns:
+        A string response - either a discount offer or general reply.
+    """
+    # Initialize dependencies (singleton patterns handle efficiency)
+    llm = LLMClient()
+    feature_store = HybridFeatureStore()
 
-def strip_markdown_json(text: str) -> str:
-    """Strip markdown code blocks from JSON response."""
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    elif text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    return text.strip()
-
-
-def run_sgr(messages, schema_class):
-    """Helper to run inference with SGR constraints."""
-    # Inject schema into system prompt for CPU builds without guided decoding
-    schema_json = json.dumps(schema_class.model_json_schema(), indent=2)
-    enhanced_messages = messages.copy()
-
-    # Enhance system message with schema
-    if enhanced_messages and enhanced_messages[0]["role"] == "system":
-        enhanced_messages[0] = {
-            "role": "system",
-            "content": enhanced_messages[0]["content"]
-            + f"\n\nYou MUST respond with raw JSON (no markdown) matching this schema:\n{schema_json}",
-        }
-
-    completion = client.chat.completions.create(
-        model=MODEL,
-        messages=enhanced_messages,
-        temperature=0.1,
-    )
-
-    raw_response = completion.choices[0].message.content
-    clean_json = strip_markdown_json(raw_response)
-    return schema_class.model_validate_json(clean_json)
-
-
-def pricing_agent(user_query: str, user_id: str):
+    # Build conversation history
     history = [
-        {
-            "role": "system",
-            "content": """You are an automated pricing negotiation agent. You must respond with valid JSON matching the required schema.
-
-ROUTING RULES:
-- If the user mentions discounts, pricing, leaving, canceling, or negotiating: use "fetch_user_features" to get their profile
-- For general questions unrelated to pricing: use "respond" with a helpful message
-
-The user_id for lookups is: """
-            + user_id,
-        }
+        {"role": "system", "content": build_routing_prompt(user_id)},
+        {"role": "user", "content": user_query},
     ]
-    history.append({"role": "user", "content": user_query})
 
     # --- Phase 1: Routing ---
     print(f"\n🤖 Processing: '{user_query}' for {user_id}")
-    decision = run_sgr(history, RouterSchema)
+    decision = llm.run_sgr(history, RouterSchema)
     print(f"   📍 Routing decision: {decision.action.tool_name}")
 
     if decision.action.tool_name == "respond":
@@ -93,47 +62,42 @@ The user_id for lookups is: """
             return "Error: User profile not found."
 
         print(
-            f"      [Data] LTV: ${context.get('user_ltv')} (DuckDB) | Margin: {context.get('cart_profit_margin') * 100}% (SQLite)"
+            f"      [Data] LTV: ${context.get('user_ltv')} (DuckDB) | "
+            f"Margin: {context.get('cart_profit_margin', 0) * 100}% (SQLite)"
         )
 
-        # Inject Data + Business Rules into Context
-        # [cite_start]This is the "Context Engineering" part [cite: 46]
-        churn_prob = context.get("churn_probability", 0.5)
-        cart_val = context.get("cart_value", 100)
-        margin = context.get("cart_profit_margin", 0.2)
+        # Extract values with defaults
+        churn_prob = context.get("churn_probability", DEFAULT_CHURN_PROBABILITY)
+        cart_val = context.get("current_cart_value", DEFAULT_CART_VALUE)
+        margin = context.get("cart_profit_margin", DEFAULT_PROFIT_MARGIN)
+        user_ltv = context.get("user_ltv", 0)
 
-        history.append(
-            {"role": "assistant", "content": "I'll fetch the user's profile now."}
-        )
+        # Inject context into conversation
+        history.append({"role": "assistant", "content": ASSISTANT_FETCH_MESSAGE})
         history.append(
             {
                 "role": "user",
-                "content": f"""User profile retrieved. Now calculate and respond with a pricing decision.
-
-USER DATA:
-- churn_probability: {churn_prob}
-- cart_value: ${cart_val}
-- profit_margin: {margin * 100}%
-- user_ltv: ${context.get("user_ltv", 0)}
-
-BUSINESS RULES:
-1. If churn_probability > 0.7: offer up to 50% of profit margin as discount
-2. If churn_probability < 0.3: max discount is 5%
-3. NEVER exceed the profit margin
-
-Respond with your analysis and offer as JSON.""",
+                "content": build_pricing_context_prompt(
+                    churn_prob=churn_prob,
+                    cart_val=cart_val,
+                    margin=margin,
+                    user_ltv=user_ltv,
+                ),
             }
         )
 
         # --- Phase 3: SGR Logic Execution ---
         print("   🧠 Calculating Offer (Schema Enforced)...")
-        offer = run_sgr(history, PricingLogic)
+        offer = llm.run_sgr(history, PricingLogic)
 
         # Audit Log (The SGR Benefit: explicit reasoning traces)
         print(f"      [Audit] Math: {offer.margin_math}")
         print(f"      [Audit] Max Allowed: {offer.max_discount_percent}%")
 
         return offer.customer_message
+
+    # Fallback for unknown tool names
+    return "I'm sorry, I couldn't process your request."
 
 
 # --- Run Demo ---
