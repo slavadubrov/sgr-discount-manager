@@ -32,21 +32,54 @@ Initialize the SQLite and DuckDB databases with dummy user data:
 uv run python -m scripts.setup_data
 ```
 
-### 2. Start vLLM Server
+### 2. Start vLLM Server (Native Linux/WSL with GPU)
 
-In a separate terminal, start the vLLM server. This serves the local LLM that the agent communicates with.
+vLLM provides the best performance when running natively on Linux or WSL2 with NVIDIA GPU support. **Important:** vLLM is **not** included in this project's dependencies because it requires CUDA and has platform-specific installation requirements.
+
+#### Prerequisites
+
+- **NVIDIA GPU** with CUDA support (compute capability 7.0+)
+- **CUDA Toolkit 12.x** installed ([installation guide](https://developer.nvidia.com/cuda-downloads))
+- **Python 3.10-3.12** (vLLM does not yet support Python 3.13)
+- For **WSL2**: Follow [NVIDIA CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/) to enable GPU passthrough
+
+#### Installation
+
+Create a **separate virtual environment** for vLLM (do not install in this project's environment):
 
 ```bash
-uv run python -m vllm.entrypoints.openai.api_server \
+# Create a dedicated vLLM environment
+cd ~
+uv venv vllm-env --python 3.12
+source vllm-env/bin/activate
+
+# Install vLLM (this will install PyTorch with CUDA support)
+uv pip install vllm
+
+# Verify installation
+python -c "import vllm; print(vllm.__version__)"
+```
+
+#### Running the Server
+
+With the vLLM environment activated, start the OpenAI-compatible API server:
+
+```bash
+# Activate the environment (if not already active)
+source ~/vllm-env/bin/activate
+
+# Start the server
+python -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen2.5-7B-Instruct \
   --port 8000
 ```
 
+The server will download the model on first run (~14GB for 7B model). Once ready, it exposes an OpenAI-compatible API at `http://localhost:8000`.
+
 > **Note:**
 >
-> 1. `vllm` and `xgrammar` are **not** included in the default `uv sync` due to platform-specific constraints.
-> 2. **Recommended**: Run vLLM using Docker (CPU mode), as described below.
-> 3. **Guided Decoding**: `xgrammar` is the default backend in newer vLLM versions. Configure it per-request via `guided_json` or `guided_decoding_backend` in the API `extra_body` parameter (see [vLLM Structured Outputs docs](https://docs.vllm.ai/en/latest/features/structured_outputs.html)).
+> - **Guided Decoding**: `xgrammar` is the default backend in newer vLLM versions. Configure it per-request via `guided_json` or `guided_decoding_backend` in the API `extra_body` parameter (see [vLLM Structured Outputs docs](https://docs.vllm.ai/en/latest/features/structured_outputs.html)).
+> - **Memory**: 7B models require ~16GB VRAM. For GPUs with less memory, use `Qwen/Qwen2.5-3B-Instruct` (~6GB) or add `--max-model-len 4096` to reduce context length.
 
 ### 2. Start vLLM Server (Docker CPU)
 
