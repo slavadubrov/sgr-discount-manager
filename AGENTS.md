@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 
 - `agent.py` drives the pricing workflow: router call, feature fetch via tools, and schema-enforced response generation.
-- `tools.py` holds `HybridFeatureStore`, which merges cold metrics from `offline_store.duckdb` with live cart data in `online_store.db`.
+- `tools.py` holds `HybridFeatureStore`, which merges cold metrics from `data/offline_store.duckdb` with live cart data in `data/online_store.db`.
 - `schemas.py` defines the Pydantic contracts (`RouterSchema`, `PricingLogic`) that govern every model reply; keep modifications backward compatible.
 - Utility files include `setup_data.py` for reseeding databases, the minimal `main.py`, and the UV project metadata (`pyproject.toml`, `uv.lock`).
 

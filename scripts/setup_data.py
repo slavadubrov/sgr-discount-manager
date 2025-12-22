@@ -1,20 +1,27 @@
 import sqlite3
 import duckdb
 import random
+import os
+
+DATA_DIR = "data"
+SQL_DIR = "sgr/store/sql"
 
 
 def load_sql(filename):
-    with open(f"sgr/store/sql/{filename}", "r") as f:
+    with open(f"{SQL_DIR}/{filename}", "r") as f:
         return f.read()
 
 
 def create_dummy_data():
     users = [f"user_{i}" for i in range(100, 110)]  # user_100 to user_109
 
+    # Ensure data directory exists
+    os.makedirs(DATA_DIR, exist_ok=True)
+
     # --- 1. Setup COLD Store (DuckDB) ---
     # Represents Historical Data (LTV, Churn) - Calculated Nightly
     print("🧊 Initializing Cold Store (DuckDB)...")
-    db_path = "offline_store.duckdb"
+    db_path = os.path.join(DATA_DIR, "offline_store.duckdb")
     con_duck = duckdb.connect(db_path)
     con_duck.execute(load_sql("setup_duckdb.sql"))
 
@@ -36,7 +43,7 @@ def create_dummy_data():
     # --- 2. Setup HOT Store (SQLite) ---
     # Represents Real-Time Data (Cart, Margin) - Changes Millisecond by Millisecond
     print("🔥 Initializing Hot Store (SQLite)...")
-    sql_path = "online_store.db"
+    sql_path = os.path.join(DATA_DIR, "online_store.db")
     con_sql = sqlite3.connect(sql_path)
     cursor = con_sql.cursor()
     cursor.executescript(

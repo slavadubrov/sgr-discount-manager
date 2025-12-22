@@ -1,10 +1,12 @@
 import sqlite3
 import duckdb
-from typing import Dict, Any
+from typing import Any
 
 
 class HybridFeatureStore:
-    def __init__(self, duck_path="offline_store.duckdb", sql_path="online_store.db"):
+    def __init__(
+        self, duck_path="data/offline_store.duckdb", sql_path="data/online_store.db"
+    ):
         self.duck_path = duck_path
         self.sql_path = sql_path
 
@@ -12,7 +14,7 @@ class HybridFeatureStore:
         with open(f"sgr/store/sql/{filename}", "r") as f:
             return f.read()
 
-    def _get_cold_data(self, user_id: str) -> Dict[str, Any]:
+    def _get_cold_data(self, user_id: str) -> dict[str, Any]:
         """Fetch analytical history from DuckDB."""
         try:
             query = self._load_sql("get_analytics.sql")
@@ -24,7 +26,7 @@ class HybridFeatureStore:
             print(f"⚠️ DuckDB Error: {e}")
             return {}
 
-    def _get_hot_data(self, user_id: str) -> Dict[str, Any]:
+    def _get_hot_data(self, user_id: str) -> dict[str, Any]:
         """Fetch live session state from SQLite."""
         try:
             query = self._load_sql("get_session.sql")
@@ -42,7 +44,7 @@ class HybridFeatureStore:
             print(f"⚠️ SQLite Error: {e}")
             return {}
 
-    def get_user_context(self, user_id: str) -> Dict[str, Any]:
+    def get_user_context(self, user_id: str) -> dict[str, Any]:
         """Merges Hot and Cold data into a single context vector."""
         cold = self._get_cold_data(user_id)
         hot = self._get_hot_data(user_id)
