@@ -1,4 +1,10 @@
-"""LLM client wrapper for structured generation with vLLM."""
+"""LLM client wrapper for structured generation with vLLM and xgrammar.
+
+This module demonstrates Structured Generation & Reasoning (SGR) using vLLM's
+native guided decoding with xgrammar backend. The xgrammar backend enforces
+strict JSON schema constraints at the token generation level, ensuring
+100% valid structured outputs.
+"""
 
 from __future__ import annotations
 
@@ -100,23 +106,31 @@ class LLMClient:
         Raises:
             ValidationError: If the response doesn't match the schema.
         """
-        schema_json = json.dumps(schema_class.model_json_schema(), indent=2)
+        schema_dict = schema_class.model_json_schema()
+        schema_json = json.dumps(schema_dict, indent=2)
         enhanced_messages = messages.copy()
 
-        # Enhance system message with schema instruction
+        # Enhance system message with schema instruction for model guidance
         if enhanced_messages and enhanced_messages[0]["role"] == "system":
             enhanced_messages[0] = {
                 "role": "system",
                 "content": (
                     enhanced_messages[0]["content"]
-                    + f"\n\nYou MUST respond with raw JSON (no markdown) matching this schema:\n{schema_json}"
+                    + f"\n\nRespond with JSON matching this schema:\n{schema_json}"
                 ),
             }
 
+        # Use vLLM's native guided_json with xgrammar backend
+        # This enforces strict schema constraints at the token generation level
+        # See: https://docs.vllm.ai/en/latest/features/structured_outputs.html
         completion = self.client.chat.completions.create(
             model=self.model,
             messages=enhanced_messages,
             temperature=DEFAULT_TEMPERATURE,
+            extra_body={
+                "guided_json": schema_dict,
+                "guided_decoding_backend": "xgrammar",
+            },
         )
 
         raw_response = completion.choices[0].message.content

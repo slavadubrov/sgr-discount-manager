@@ -1,12 +1,39 @@
 # SGR Discount Manager
 
-An AI-powered pricing negotiation agent using **Structured Generation & Reasoning (SGR)** and a **Hybrid Data Architecture** (SQLite + DuckDB).
+> **⚠️ Demo Project**: This is a demonstration project showcasing how to use **Structured Generation & Reasoning (SGR)** with **vLLM** and the **xgrammar** backend to enforce strict JSON output schemas.
+
+## What This Demo Shows
+
+This project demonstrates:
+
+- **Schema-Enforced LLM Outputs**: Using vLLM's `guided_json` with `xgrammar` backend to guarantee 100% valid structured responses
+- **Pydantic Schema Integration**: Defining strict output schemas as Pydantic models that vLLM enforces at token generation level
+- **Multi-Phase Agent Workflow**: Routing → Context Retrieval → Structured Decision Making
+- **Hybrid Data Architecture**: Combining SQLite (hot store) + DuckDB (cold store) for feature retrieval
+
+## Key Feature: xgrammar-Enforced Schemas
+
+The core SGR capability is in [`sgr/utils/llm_client.py`](sgr/utils/llm_client.py):
+
+```python
+# Use vLLM's native guided_json with xgrammar backend
+completion = self.client.chat.completions.create(
+    model=self.model,
+    messages=enhanced_messages,
+    extra_body={
+        "guided_json": schema_dict,           # Pydantic schema as dict
+        "guided_decoding_backend": "xgrammar", # Hardware-enforced constraints
+    },
+)
+```
+
+This ensures the LLM can **only** generate tokens that form valid JSON matching your schema—no post-hoc validation failures.
 
 ## Architecture
 
-- **Hot Store (SQLite)**: Real-time session data (Cart Value, Margin).
-- **Cold Store (DuckDB)**: Historical analytical data (LTV, Churn Probability).
-- **Agent**: Uses `vLLM` with `xgrammar` to enforce strict output schemas (`RouterSchema` and `PricingLogic`).
+- **Hot Store (SQLite)**: Real-time session data (Cart Value, Margin)
+- **Cold Store (DuckDB)**: Historical analytical data (LTV, Churn Probability)
+- **Agent**: Uses vLLM with xgrammar to enforce strict output schemas ([`RouterSchema`](sgr/models/schemas.py) and [`PricingLogic`](sgr/models/schemas.py))
 
 ## Prerequisites
 
@@ -81,9 +108,11 @@ The server will download the model on first run (~14GB for 7B model). Once ready
 > - **Guided Decoding**: `xgrammar` is the default backend in newer vLLM versions. Configure it per-request via `guided_json` or `guided_decoding_backend` in the API `extra_body` parameter (see [vLLM Structured Outputs docs](https://docs.vllm.ai/en/latest/features/structured_outputs.html)).
 > - **Memory**: 7B models require ~16GB VRAM. For GPUs with less memory, use `Qwen/Qwen2.5-3B-Instruct` (~6GB) or add `--max-model-len 4096` to reduce context length.
 
-### 2. Start vLLM Server (Docker CPU)
+### 2. Start vLLM Server (Docker CPU - Limited xgrammar Support)
 
-Since vLLM installation can be tricky on some platforms, I recommend building a CPU-enabled Docker image. This is the only way to run vLLM on Apple Silicon at the moment of writing.
+> **⚠️ Note**: CPU mode may not include full xgrammar support. For guaranteed schema enforcement with xgrammar, use a GPU setup (Option 1 above).
+
+For testing on Apple Silicon or systems without NVIDIA GPUs, you can build a CPU-enabled Docker image:
 
 1. **Clone vLLM Repository**:
 
