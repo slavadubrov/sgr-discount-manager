@@ -1,78 +1,69 @@
 # SGR Discount Manager
 
-> **⚠️ Demo Project**: This is a demonstration project showcasing how to use **Structured Generation & Reasoning (SGR)** with **vLLM** and the **xgrammar** backend to enforce strict JSON output schemas.
+Companion demo for the article [Schema-Guided Reasoning: vLLM, XGrammar, and Pydantic](https://slavadubrov.github.io/blog/2025/12/28/schema-guided-reasoning-vllm/).
 
-## What This Demo Shows
+A pricing agent asks a model served by vLLM for a structured discount proposal. vLLM's structured outputs constrain the JSON shape during generation. The application still checks that the completion finished, validates the JSON with Pydantic, and approves or rejects the discount with a policy function.
 
-This project demonstrates:
+## What the demo shows
 
-- **Schema-Enforced LLM Outputs**: Using vLLM's `guided_json` with `xgrammar` backend to guarantee 100% valid structured responses
-- **Pydantic Schema Integration**: Defining strict output schemas as Pydantic models that vLLM enforces at token generation level
-- **Multi-Phase Agent Workflow**: Routing → Context Retrieval → Structured Decision Making
-- **Hybrid Data Architecture**: Combining SQLite (hot store) + DuckDB (cold store) for feature retrieval
+- **Schema-Guided Reasoning (SGR)**: Pydantic schemas list the fields the model fills, analysis first and the proposed discount last ([`sgr/models/schemas.py`](sgr/models/schemas.py)).
+- **Routing and a cascade**: `RouterSchema` picks between fetching customer data and a direct reply; `PricingLogic` records the analysis and the proposal.
+- **Constrained decoding with vLLM**: the client sends the JSON Schema in `structured_outputs`; the server selects the backend, here XGrammar.
+- **Checks in application code**: `completed_content` rejects incomplete, refused, or empty completions; `approve_discount` enforces the discount policy ([`sgr/agent.py`](sgr/agent.py)).
+- **Hybrid feature store**: SQLite holds the live session (cart value, margin); DuckDB holds history (lifetime value, churn probability).
 
-## Key Feature: xgrammar-Enforced Schemas
-
-The core SGR capability is in [`sgr/utils/llm_client.py`](sgr/utils/llm_client.py):
+The request in [`sgr/utils/llm_client.py`](sgr/utils/llm_client.py):
 
 ```python
-# Use vLLM's native guided_json with xgrammar backend
+# vLLM v0.12+ structured outputs. Configure the backend on the server.
 completion = self.client.chat.completions.create(
     model=self.model,
     messages=enhanced_messages,
-    extra_body={
-        "guided_json": schema_dict,           # Pydantic schema as dict
-        "guided_decoding_backend": "xgrammar", # Hardware-enforced constraints
-    },
+    temperature=DEFAULT_TEMPERATURE,
+    extra_body={"structured_outputs": {"json": schema_dict}},
 )
+
+return schema_class.model_validate_json(completed_content(completion))
 ```
 
-This ensures the LLM can **only** generate tokens that form valid JSON matching your schema—no post-hoc validation failures.
+The schema constrains the JSON shape. It does not make the proposed discount correct. A token limit can also stop generation in the middle of the object; `completed_content` rejects that completion.
 
-## Architecture
+## Discount policy
 
-- **Hot Store (SQLite)**: Real-time session data (Cart Value, Margin)
-- **Cold Store (DuckDB)**: Historical analytical data (LTV, Churn Probability)
-- **Agent**: Uses vLLM with xgrammar to enforce strict output schemas ([`RouterSchema`](sgr/models/schemas.py) and [`PricingLogic`](sgr/models/schemas.py))
+`approve_discount` is the rule. It rejects proposals outside 0–20 percent, rounds down to hundredths of a percentage point, and rejects a discount above the cart's margin percentage. The business rules in the pricing prompt ([`sgr/prompts/pricing.py`](sgr/prompts/pricing.py)) guide the model toward the same limits, but only the function decides. The agent reports the approved percentage and does not issue a coupon.
 
 ## Prerequisites
 
-- Python 3.10+
-- `uv` for dependency management
-- A machine capable of running `vLLM` (GPU recommended)
+- Python 3.13+ and [`uv`](https://docs.astral.sh/uv/) for this project
+- For the full agent run, a machine that can run vLLM (an NVIDIA GPU is recommended). The offline tests need no model.
 
 ## Installation
 
-1. Initialize the environment and install dependencies:
-
-   ```bash
-   uv sync
-   ```
+```bash
+uv sync
+```
 
 ## Usage
 
-### 1. Generate Synthetic Data
+### 1. Run the offline tests
 
-Initialize the SQLite and DuckDB databases with dummy user data:
+These tests check the policy function and the completion check with synthetic inputs. They need no model and no vLLM server.
+
+```bash
+uv run pytest
+```
+
+### 2. Generate synthetic data
+
+Create the SQLite and DuckDB databases with random demo users (`user_100` to `user_109`):
 
 ```bash
 uv run python -m scripts.setup_data
 ```
 
-### 2. Start vLLM Server (Native Linux/WSL with GPU)
+### 3. Start a vLLM server (Linux or WSL2 with an NVIDIA GPU)
 
-vLLM provides the best performance when running natively on Linux or WSL2 with NVIDIA GPU support. **Important:** vLLM is **not** included in this project's dependencies because it requires CUDA and has platform-specific installation requirements.
-
-#### Prerequisites
-
-- **NVIDIA GPU** with CUDA support (compute capability 7.0+)
-- **CUDA Toolkit 12.x** installed ([installation guide](https://developer.nvidia.com/cuda-downloads))
-- **Python 3.10-3.12** (vLLM does not yet support Python 3.13)
-- For **WSL2**: Follow [NVIDIA CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/) to enable GPU passthrough
-
-#### Installation
-
-Create a **separate virtual environment** for vLLM (do not install in this project's environment):
+vLLM is **not** a dependency of this project, because it needs CUDA and has platform-specific installation requirements. Install it in a **separate virtual environment**. The [vLLM installation guide](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/) lists the supported Python and CUDA versions. For WSL2, see [NVIDIA CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/).
 
 ```bash
 # Create a dedicated vLLM environment
@@ -87,52 +78,40 @@ uv pip install vllm
 python -c "import vllm; print(vllm.__version__)"
 ```
 
-#### Running the Server
-
-With the vLLM environment activated, start the OpenAI-compatible API server:
+Start the OpenAI-compatible server with XGrammar as the structured-output backend:
 
 ```bash
-# Activate the environment (if not already active)
 source ~/vllm-env/bin/activate
 
-# Start the server
-python -m vllm.entrypoints.openai.api_server \
-  --model Qwen/Qwen2.5-7B-Instruct \
-  --port 8000
+vllm serve Qwen/Qwen2.5-7B-Instruct \
+    --port 8000 \
+    --structured-outputs-config.backend xgrammar
 ```
 
-The server will download the model on first run (~14GB for 7B model). Once ready, it exposes an OpenAI-compatible API at `http://localhost:8000`.
+The server downloads the model on the first run (about 15 GB for the 7B model). It then serves an OpenAI-compatible API at `http://localhost:8000`. The client reads the model name from the server.
 
-> **Note:**
->
-> - **Guided Decoding**: `xgrammar` is the default backend in newer vLLM versions. Configure it per-request via `guided_json` or `guided_decoding_backend` in the API `extra_body` parameter (see [vLLM Structured Outputs docs](https://docs.vllm.ai/en/latest/features/structured_outputs.html)).
-> - **Memory**: 7B models require ~16GB VRAM. For GPUs with less memory, use `Qwen/Qwen2.5-3B-Instruct` (~6GB) or add `--max-model-len 4096` to reduce context length.
+> **Memory**: 7B models need about 16 GB of GPU memory. For GPUs with less memory, use `Qwen/Qwen2.5-3B-Instruct` or add `--max-model-len 4096` to reduce context length.
 
-### 2. Start vLLM Server (Docker CPU - Limited xgrammar Support)
+### 3 (alternative). Start a vLLM server in Docker on a CPU
 
-> **⚠️ Note**: CPU mode may not include full xgrammar support. For guaranteed schema enforcement with xgrammar, use a GPU setup (Option 1 above).
+For testing on Apple Silicon or systems without an NVIDIA GPU, you can build a CPU image. It is slow, and a small model follows the prompt less well.
 
-For testing on Apple Silicon or systems without NVIDIA GPUs, you can build a CPU-enabled Docker image:
-
-1. **Clone vLLM Repository**:
+1. **Clone the vLLM repository**:
 
    ```bash
    git clone https://github.com/vllm-project/vllm.git
    cd vllm
    ```
 
-2. **Build the CPU Image**:
+2. **Build the CPU image**:
 
    ```bash
    docker build -f docker/Dockerfile.cpu --tag vllm-cpu-env --build-arg max_jobs=8 .
    ```
 
-   > **Troubleshooting:**
-   > If the build fails with "Killed" or "ResourceExhausted", it's likely running out of memory. The default build uses 32 parallel jobs. We limit this with `--build-arg max_jobs=8`. If you still have issues (e.g. on an 8GB Mac), try lowering it further to `max_jobs=4`.
+   > **Troubleshooting:** If the build fails with "Killed" or "ResourceExhausted", it is running out of memory. `--build-arg max_jobs=8` limits parallel jobs; on an 8 GB Mac, try `max_jobs=4`.
 
-3. **Run the Server**:
-
-   > **Note:** We use `Qwen2.5-3B-Instruct` with a reduced context length (`--max-model-len 4096`) to avoid OOM (Out of Memory) errors on CPU. See troubleshooting below if you want to use larger models.
+3. **Run the server**:
 
    ```bash
    docker run --rm -it \
@@ -147,97 +126,52 @@ For testing on Apple Silicon or systems without NVIDIA GPUs, you can build a CPU
        --max-model-len 8192
    ```
 
-   _(Ensure Docker Desktop is running. You may need to adjust `--platform linux/arm64` on Mac if automatic detection fails, though building from source usually handles it.)_
+   _(Ensure Docker Desktop is running. You may need `--platform linux/arm64` on a Mac if automatic detection fails.)_
 
-   > **Troubleshooting OOM (Out of Memory) Errors:**
-   >
-   > If you see `RuntimeError: Engine core initialization failed` with exit code `-9`, the process was killed due to insufficient memory.
-   >
-   > **Memory Requirements for Qwen2.5-7B-Instruct:**
-   >
-   > - ~14GB for model weights (7B params × 2 bytes for bfloat16)
-   > - - KV cache (controlled by `VLLM_CPU_KVCACHE_SPACE`)
-   > - - runtime overhead
-   > - **Total: ~20-24GB minimum**
-   >
-   > **Solutions:**
-   >
-   > 1. **Increase Docker memory**: In Docker Desktop → Settings → Resources, set memory to at least 24GB.
-   >
-   > 2. **Use a smaller model**:
-   >
-   >    ```bash
-   >    --model Qwen/Qwen2.5-3B-Instruct   # ~6GB weights
-   >    --model Qwen/Qwen2.5-1.5B-Instruct # ~3GB weights
-   >    ```
-   >
-   > 3. **Reduce context length** (limits KV cache size):
-   >    ```bash
-   >    --max-model-len 8192  # Default is 32768
-   >    ```
-   >
-   > **Troubleshooting Guided Decoding (Schema Validation Errors):**
-   >
-   > If you see validation errors like `Field required [type=missing, input_value={'response': ...}]`, the model is returning JSON with the wrong structure.
-   >
-   > **Cause:** The Docker CPU build doesn't include `xgrammar` or `outlines` guided decoding backends. Without hardware-enforced schema constraints, the model relies purely on instruction-following.
-   >
-   > **How the agent handles this:**
-   >
-   > - The schema is injected directly into the system prompt
-   > - Works well for simple queries, but smaller models (1.5B) may occasionally produce malformed JSON
-   >
-   > **For 100% reliability:**
-   >
-   > - Use the 7B model on a GPU with guided decoding enabled
-   > - Or use a larger model (3B+) on CPU which follows instructions more reliably
+   > **Troubleshooting out-of-memory errors:** If you see `RuntimeError: Engine core initialization failed` with exit code `-9`, the process ran out of memory. Increase Docker's memory limit (Docker Desktop → Settings → Resources), use a smaller model such as `Qwen/Qwen2.5-1.5B-Instruct`, or lower `--max-model-len`.
 
-### 3. Run the Agent
-
-Execute the agent script to see the negotiation in action:
+### 4. Run the agent
 
 ```bash
 uv run python -m sgr.agent
 ```
 
-## Project Structure
+Illustrative output (the values depend on the random data and the model):
+
+```text
+🤖 Processing: 'I want a discount or I'm leaving!' for user_102
+📍 Routing decision: fetch_user_features
+🔍 Fetching features for user_102...
+   [Data] LTV: $1500.0 | Margin: 20.0%
+🧠 Proposing Offer (Schema Enforced)...
+   [Audit] Math: Cart $200 * 0.20 Margin = $40
+   [Audit] Approved Discount: 15.00%
+
+💬 Final Reply: Illustrative approved discount: 15.00%. No coupon has been issued.
+```
+
+If the proposal fails the policy, the reply is `No discount approved: the proposal failed the pricing policy.` If the completion is incomplete or does not match the schema, the run stops with a `ValueError` or a Pydantic `ValidationError`.
+
+## Project structure
 
 ```text
 sgr/
 ├── __init__.py              # Public API exports
-├── agent.py                 # Main agent orchestration
+├── agent.py                 # Agent orchestration and approve_discount
 ├── config/
-│   └── constants.py         # Centralized configuration
+│   └── constants.py         # Configuration values
 ├── models/
 │   └── schemas.py           # Pydantic SGR schemas
 ├── prompts/
 │   ├── routing.py           # Routing phase prompts
 │   └── pricing.py           # Pricing phase prompts
 ├── store/
-│   ├── hybrid_store.py      # Hot/Cold data retrieval
+│   ├── hybrid_store.py      # Hot/cold data retrieval
 │   └── sql/                 # SQL query files
 └── utils/
-    ├── json_utils.py        # JSON parsing utilities
-    └── llm_client.py        # LLM client wrapper
-```
-
-- `scripts/setup_data.py`: Script to generate synthetic data for testing.
-
-## Maintenance
-
-### Update Pre-commit Hooks
-
-To update the pre-commit hooks to their latest versions:
-
-```bash
-uv run pre-commit autoupdate
-```
-
-### Update Python Dependencies
-
-To update the `uv` lockfile and upgrade all packages:
-
-```bash
-uv lock --upgrade
-uv sync
+    └── llm_client.py        # vLLM client and completed_content
+scripts/
+└── setup_data.py            # Synthetic data generation
+tests/
+└── test_policy.py           # Offline policy and completion tests
 ```

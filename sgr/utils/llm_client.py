@@ -1,9 +1,10 @@
-"""LLM client wrapper for structured generation with vLLM and xgrammar.
+"""LLM client for schema-constrained generation with vLLM.
 
-This module demonstrates Structured Generation & Reasoning (SGR) using vLLM's
-native guided decoding with xgrammar backend. The xgrammar backend enforces
-strict JSON schema constraints at the token generation level, ensuring
-100% valid structured outputs.
+vLLM's structured outputs constrain the JSON shape during generation. The
+backend (for example XGrammar) is set on the server with
+`--structured-outputs-config.backend`. The application still checks that the
+completion finished, validates it with Pydantic, and enforces the discount
+policy in `sgr.agent.approve_discount`.
 """
 
 from __future__ import annotations
@@ -16,10 +17,8 @@ from openai import OpenAI
 from ..config.constants import (
     DEFAULT_API_BASE_URL,
     DEFAULT_API_KEY,
-    DEFAULT_MODEL,
     DEFAULT_TEMPERATURE,
 )
-from .json_utils import strip_markdown_json
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -27,15 +26,21 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound="BaseModel")
 
 
+def completed_content(completion) -> str:
+    """Reject incomplete, refused, or empty results before JSON validation."""
+    if not completion.choices:
+        raise ValueError("No completion returned")
+    choice = completion.choices[0]
+    if choice.finish_reason != "stop" or getattr(choice.message, "refusal", None):
+        raise ValueError("Completion was not successful")
+    content = choice.message.content
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("Completion has no content")
+    return content
+
+
 class LLMClient:
-    """Wrapper for OpenAI-compatible LLM inference with schema enforcement.
-
-    This client provides structured generation (SGR) capabilities by injecting
-    JSON schemas into prompts and validating responses against Pydantic models.
-
-    Attributes:
-        client: The underlying OpenAI client instance.
-        model: The model ID to use for inference.
+    """Wrapper for an OpenAI-compatible vLLM server with structured outputs.
 
     Example:
         >>> from sgr.models.schemas import RouterSchema
@@ -49,7 +54,7 @@ class LLMClient:
     def __new__(
         cls, base_url: str | None = None, api_key: str | None = None
     ) -> LLMClient:
-        """Implement singleton pattern for efficient resource usage."""
+        """Reuse one client per process."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
@@ -63,8 +68,9 @@ class LLMClient:
         """Initialize the LLM client.
 
         Args:
-            base_url: API base URL. Defaults to localhost vLLM server.
-            api_key: API key. Defaults to "EMPTY" for local vLLM.
+            base_url: API base URL. Defaults to a local vLLM server.
+            api_key: API key. Local vLLM commonly has no authentication;
+                "EMPTY" is not authentication.
         """
         if getattr(self, "_initialized", False):
             return
@@ -77,41 +83,28 @@ class LLMClient:
         self._initialized = True
 
     def _get_available_model(self) -> str:
-        """Auto-detect the model running on vLLM server.
-
-        Returns:
-            The ID of the first available model, or DEFAULT_MODEL as fallback.
-        """
-        try:
-            models = self.client.models.list()
-            if models.data:
-                return models.data[0].id
-        except Exception:
-            pass
-        return DEFAULT_MODEL
+        """Auto-detect the model running on the vLLM server."""
+        models = self.client.models.list()
+        if not models.data:
+            raise RuntimeError("vLLM reported no available models")
+        return models.data[0].id
 
     def run_sgr(self, messages: list[dict], schema_class: type[T]) -> T:
-        """Run inference with Schema-Guided Response constraints.
+        """Run inference with Schema-Guided Reasoning constraints.
 
-        Injects the Pydantic schema into the system prompt and validates
-        the response against the schema.
-
-        Args:
-            messages: List of message dicts with 'role' and 'content' keys.
-            schema_class: Pydantic model class to validate response against.
-
-        Returns:
-            Validated instance of the schema_class.
+        Uses vLLM structured outputs to constrain the JSON shape at generation
+        time, then checks completion and validates the result with Pydantic.
 
         Raises:
-            ValidationError: If the response doesn't match the schema.
+            ValueError: If the completion is incomplete, refused, or empty.
+            ValidationError: If the response does not match the schema.
         """
         schema_dict = schema_class.model_json_schema()
-        schema_json = json.dumps(schema_dict, indent=2)
-        enhanced_messages = messages.copy()
 
-        # Enhance system message with schema instruction for model guidance
+        # Add the schema to the system message for prompt guidance
+        enhanced_messages = messages.copy()
         if enhanced_messages and enhanced_messages[0]["role"] == "system":
+            schema_json = json.dumps(schema_dict, indent=2)
             enhanced_messages[0] = {
                 "role": "system",
                 "content": (
@@ -120,19 +113,13 @@ class LLMClient:
                 ),
             }
 
-        # Use vLLM's native guided_json with xgrammar backend
-        # This enforces strict schema constraints at the token generation level
-        # See: https://docs.vllm.ai/en/latest/features/structured_outputs.html
+        # vLLM v0.12+ structured outputs. Configure the backend on the server.
+        # See: https://docs.vllm.ai/en/latest/features/structured_outputs/
         completion = self.client.chat.completions.create(
             model=self.model,
             messages=enhanced_messages,
             temperature=DEFAULT_TEMPERATURE,
-            extra_body={
-                "guided_json": schema_dict,
-                "guided_decoding_backend": "xgrammar",
-            },
+            extra_body={"structured_outputs": {"json": schema_dict}},
         )
 
-        raw_response = completion.choices[0].message.content
-        clean_json = strip_markdown_json(raw_response)
-        return schema_class.model_validate_json(clean_json)
+        return schema_class.model_validate_json(completed_content(completion))

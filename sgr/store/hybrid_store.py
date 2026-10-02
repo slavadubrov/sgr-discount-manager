@@ -45,9 +45,13 @@ class HybridFeatureStore:
             return {}
 
     def get_user_context(self, user_id: str) -> dict[str, Any]:
-        """Merges Hot and Cold data into a single context vector."""
-        cold = self._get_cold_data(user_id)
-        hot = self._get_hot_data(user_id)
+        """Merge hot and cold data; return {} when the user has no live session.
 
-        # Merge dictionaries
+        The pricing policy needs the cart value and margin from the hot store,
+        so a user without a session has no pricing context.
+        """
+        hot = self._get_hot_data(user_id)
+        if not hot:
+            return {}
+        cold = self._get_cold_data(user_id)
         return {"user_id": user_id, **cold, **hot}

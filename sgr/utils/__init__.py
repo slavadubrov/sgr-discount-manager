@@ -1,6 +1,5 @@
 """Utility functions for the SGR discount manager."""
 
-from .json_utils import strip_markdown_json
-from .llm_client import LLMClient
+from .llm_client import LLMClient, completed_content
 
-__all__ = ["strip_markdown_json", "LLMClient"]
+__all__ = ["LLMClient", "completed_content"]

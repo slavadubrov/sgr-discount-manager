@@ -33,9 +33,6 @@ def create_dummy_data():
         churn = round(random.random(), 2)
         days = random.randint(5, 60)
 
-        # Manually format for duckdb execute if binding issue exists, but binding is safer.
-        # Original code used f-string for duckdb, let's switch to binding if possible or stick to f-string if query is simple.
-        # But wait, extract used ? placeholders. DuckDB Python API supports standard placeholders.
         con_duck.execute(insert_sql, [uid, ltv, churn, days])
 
     con_duck.close()
