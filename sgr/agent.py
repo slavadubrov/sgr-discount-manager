@@ -18,9 +18,6 @@ from .prompts.routing import build_routing_prompt
 from .store.hybrid_store import HybridFeatureStore
 from .utils.llm_client import LLMClient
 
-MAX_DISCOUNT_PERCENT = Decimal("20")
-"""Policy limit for any approved discount, in percentage points."""
-
 
 def approve_discount(offer: PricingLogic, context: dict) -> Decimal:
     """Enforce the pricing policy independently of the model's explanation."""
@@ -33,13 +30,13 @@ def approve_discount(offer: PricingLogic, context: dict) -> Decimal:
     if cart_value <= 0 or not Decimal("0") <= margin <= Decimal("1"):
         raise ValueError("Invalid pricing context")
 
-    if not Decimal("0") <= proposed <= MAX_DISCOUNT_PERCENT:
+    if not Decimal("0") <= proposed <= Decimal("20"):
         raise ValueError("Proposed discount violates pricing policy")
     # Policy rounds down to hundredths of a percentage point before approval.
     approved = proposed.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
     gross_profit = cart_value * margin
     discount_cost = cart_value * approved / Decimal("100")
-    policy_cap = min(margin * Decimal("100"), MAX_DISCOUNT_PERCENT)
+    policy_cap = min(margin * Decimal("100"), Decimal("20"))
     if not Decimal("0") <= approved <= policy_cap or discount_cost > gross_profit:
         raise ValueError("Proposed discount violates pricing policy")
 
