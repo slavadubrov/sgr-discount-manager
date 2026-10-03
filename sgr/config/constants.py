@@ -14,11 +14,8 @@ DEFAULT_API_BASE_URL: str = "http://localhost:8000/v1"
 DEFAULT_API_KEY: str = "EMPTY"
 """API key for vLLM server (EMPTY for local deployment)."""
 
-DEFAULT_MODEL: str = "Qwen/Qwen2.5-1.5B-Instruct"
-"""Fallback model ID if auto-detection fails."""
-
 DEFAULT_TEMPERATURE: float = 0.1
-"""Temperature for LLM inference (low for deterministic responses)."""
+"""Temperature for LLM inference (low to reduce sampling variation; not deterministic)."""
 
 # =============================================================================
 # Data Paths

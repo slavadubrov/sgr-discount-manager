@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from typing import Literal, Union
 
 
-# --- Phase 1: Routing (Routing Pattern) ---
+# --- Phase 1: Routing (Union for branching) ---
 class FeatureLookup(BaseModel):
     """Route to DB lookup if pricing context is needed."""
 
@@ -22,10 +22,10 @@ class RouterSchema(BaseModel):
     action: Union[FeatureLookup, GeneralResponse]
 
 
-# --- Phase 2: Pricing Logic (The Fuzzy Logic CPU) ---
+# --- Phase 2: Pricing Logic (Cascade for sequential reasoning) ---
 class PricingLogic(BaseModel):
     """
-    Strict reasoning topology for dynamic pricing.
+    Structured response for dynamic pricing. The fields record an intended analysis→decision flow.
     """
 
     # 1. Data Analysis (Reflection)
@@ -36,17 +36,13 @@ class PricingLogic(BaseModel):
         ..., description="Analyze cart_value and profit_margin."
     )
 
-    # 2. Hard Math Enforcement (Constraint Enforcement)
-    # The model must output the math equation strings here
+    # 2. Recorded calculation; application code recomputes policy
     margin_math: str = Field(
         ..., description="Calculate absolute profit: 'Cart $200 * 0.20 Margin = $40'."
     )
 
-    # 3. The Decision Constraint
+    # 3. Model-proposed decision; application code approves it.
     max_discount_percent: float = Field(
-        ..., description="Max allowed discount % based on margin. NEVER exceed margin."
+        ...,
+        description="Proposed discount percentage. Application code enforces policy.",
     )
-
-    # 4. Final Output
-    offer_code: str = Field(..., description="Generated code (e.g. SAVE20).")
-    customer_message: str = Field(..., description="The final polite offer text.")

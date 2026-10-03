@@ -1,7 +1,8 @@
 """Pricing decision prompts for discount calculation.
 
 This module contains prompts used by the pricing phase of the agent
-to calculate and communicate discount offers based on user data.
+to ask the model for a discount proposal. The rules here guide the model;
+`sgr.agent.approve_discount` is the rule that the application enforces.
 """
 
 from ..config.constants import HIGH_CHURN_THRESHOLD, LOW_CHURN_THRESHOLD
@@ -18,11 +19,12 @@ USER DATA:
 - user_ltv: ${user_ltv}
 
 BUSINESS RULES:
-1. If churn_probability > {high_churn_threshold}: offer up to 50% of profit margin as discount
-2. If churn_probability < {low_churn_threshold}: max discount is 5%
-3. NEVER exceed the profit margin
+1. Propose a discount between 0 and 20 percent. It must not exceed the profit margin percentage.
+2. If churn_probability > {high_churn_threshold}: you may propose up to that limit.
+3. If churn_probability < {low_churn_threshold}: propose at most 5 percent.
+4. Application code checks the proposal and rejects any discount above the limit in rule 1.
 
-Respond with your analysis and offer as JSON."""
+Respond with your analysis and proposed discount as JSON."""
 
 
 def build_pricing_context_prompt(
